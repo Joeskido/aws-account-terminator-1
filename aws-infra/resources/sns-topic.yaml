@@ -1,0 +1,20 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "SNS Topic for Notifications"
+
+Resources:
+  DeletionNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "AccountDeletionNotifications"
+      Subscription:
+        - Protocol: email
+          Endpoint: "Account_owner@example.com"
+        - Protocol: email
+          Endpoint: "requester@example.com"
+        - Protocol: email
+          Endpoint: "devex_manager@example.com"
+
+Outputs:
+  NotificationTopicArn:
+    Description: "ARN of the SNS topic for notifications"
+    Value: !Ref DeletionNotificationTopic

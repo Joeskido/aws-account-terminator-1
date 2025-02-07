@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Lambda Functions for AWS Account Deletion Automation"
+
+Resources:
+  ValidateInputLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "ValidateInputLambda"
+      Handler: "validate_input.validate_handler"
+      Runtime: python3.9
+      Code:
+        S3Bucket: "s3-bucket"
+        S3Key: "validate_input.zip"
+      Role: !ImportValue LambdaExecutionRoleArn
+
+  HandleApprovalLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "HandleApprovalLambda"
+      Handler: "handle_approval.handler"
+      Runtime: python3.9
+      Code:
+        S3Bucket: "s3-bucket"
+        S3Key: "handle_approval.zip"
+      Role: !ImportValue LambdaExecutionRoleArn
+
+  TerminateAccountLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "TerminateAccountLambda"
+      Handler: "terminate_account.handler"
+      Runtime: python3.9
+      Code:
+        S3Bucket: "s3-bucket"
+        S3Key: "terminate_account.zip"
+      Role: !ImportValue LambdaExecutionRoleArn
+
+  SendNotificationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "SendNotificationLambda"
+      Handler: "send_notification.handler"
+      Runtime: python3.9
+      Code:
+        S3Bucket: "s3-bucket"
+        S3Key: "send_notification.zip"
+      Role: !ImportValue LambdaExecutionRoleArn
+
+  ServiceNowHandler:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "ServiceNowHandler"
+      Handler: "servicenow_handler.lambda_handler"
+      Runtime: python3.9
+      Code:
+        S3Bucket: "s3-bucket"
+        S3Key: "servicenow_handler.zip"
+      Role: !ImportValue LambdaExecutionRoleArn

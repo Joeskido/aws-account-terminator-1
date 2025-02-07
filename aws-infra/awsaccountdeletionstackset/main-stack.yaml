@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Main Stack for AWS Account Deletion Automation"
+
+Resources:
+  # Lambda Functions
+  LambdasStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: "./lambdas.yaml"
+
+  # API Gateway
+  ApiGatewayStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: "./resources/api-gateway.yaml"
+
+  # SNS Topic
+  SnsTopicStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: "./resources/sns-topic.yaml"
+
+  # Step Functions
+  StepFunctionsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: "./resources/step-functions.yaml"
+
+  # IAM Roles
+  RolesStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: "./resources/roles.yaml"
+
+Outputs:
+  ApiGatewayUrl:
+    Description: "URL for the ServiceNow API Gateway"
+    Value: !GetAtt ApiGatewayStack.Outputs.ApiGatewayUrl
+
+  StateMachineArn:
+    Description: "ARN of the Step Functions state machine"
+    Value: !GetAtt StepFunctionsStack.Outputs.StateMachineArn
+
+  NotificationTopicArn:
+    Description: "ARN of the SNS topic for notifications"
+    Value: !GetAtt SnsTopicStack.Outputs.NotificationTopicArn

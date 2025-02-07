@@ -1,0 +1,378 @@
+import boto3
+import logging
+import os
+import time
+
+# Set up logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def assume_role(role_arn, session_name="ControlTowerAssumeRoleSession"):
+    """
+    Assume the specified role using STS and return temporary credentials.
+    """
+    sts_client = boto3.client('sts')
+    response = sts_client.assume_role(
+        RoleArn=role_arn,
+        RoleSessionName=session_name
+    )
+    return response['Credentials']
+
+def get_assumed_session(target_account_id):
+    """
+    Construct the target role ARN based on the target account ID and the
+    Control Tower role name. The default role name is 'AWSControlTowerExecution'
+    but can be overridden via the environment variable CONTROL_TOWER_ROLE_NAME.
+    Returns a boto3 Session object using the assumed role's credentials.
+    """
+    control_tower_role_name = os.environ.get("CONTROL_TOWER_ROLE_NAME", "AWSControlTowerExecution")
+    target_role_arn = f"arn:aws:iam::{target_account_id}:role/{control_tower_role_name}"
+    logger.info(f"Assuming target role: {target_role_arn}")
+    creds = assume_role(target_role_arn)
+    session = boto3.Session(
+         aws_access_key_id=creds['AccessKeyId'],
+         aws_secret_access_key=creds['SecretAccessKey'],
+         aws_session_token=creds['SessionToken']
+    )
+    return session
+
+def lambda_handler(event, context):
+    """
+    Expected event format:
+    {
+      "account_id": "123456789012",
+      "account_type": "member"  # or "standalone"
+    }
+    """
+    account_id = event.get("account_id")
+    account_type = event.get("account_type", "member")
+    
+    if not account_id:
+        logger.error("No account_id provided in event.")
+        return {"status": "error", "message": "account_id is required"}
+    
+    # Create an assumed session using the target account's Control Tower role.
+    session = get_assumed_session(account_id)
+    
+    # 1. Delete all AWS resources in the account.
+    try:
+        delete_all_resources(session, account_id)
+    except Exception as e:
+        logger.error(f"Error during resource deletion: {e}")
+        return {"status": "error", "message": f"Resource deletion error: {e}"}
+    
+    # 2. Remove the account from the AWS Organization (for member accounts).
+    try:
+        if account_type.lower() == "member":
+            remove_member_account(session, account_id)
+        else:
+            logger.info("Standalone account detected. Manual closure is required.")
+            return {"status": "manual", "message": "Standalone accounts must be closed manually via the AWS Console."}
+    except Exception as e:
+        logger.error(f"Error removing account: {e}")
+        return {"status": "error", "message": f"Account removal error: {e}"}
+    
+    return {"status": "success", "message": f"Account {account_id} processed for deletion."}
+
+def delete_all_resources(session, account_id):
+    """
+    Delete resources across multiple AWS services using the assumed role's session.
+    This example covers many common resource types. Adjust or expand as needed.
+    """
+    # --- EC2, ELB, VPC, and Elastic IPs (region-specific) ---
+    ec2_regions = get_all_regions(session, 'ec2')
+    for region in ec2_regions:
+        delete_ec2_instances(session, region)
+        delete_elbs(session, region)
+        delete_vpcs(session, region)
+        delete_elastic_ips(session, region)
+    
+    # --- S3 buckets (global) ---
+    delete_s3_buckets(session)
+    
+    # --- RDS Instances ---
+    rds_regions = get_all_regions(session, 'rds')
+    for region in rds_regions:
+        delete_rds_instances(session, region)
+    
+    # --- Lambda Functions ---
+    lambda_regions = get_all_regions(session, 'lambda')
+    for region in lambda_regions:
+        delete_lambda_functions(session, region)
+    
+    # --- CloudFormation Stacks ---
+    cf_regions = get_all_regions(session, 'cloudformation')
+    for region in cf_regions:
+        delete_cloudformation_stacks(session, region)
+    
+    # --- EKS Clusters ---
+    eks_regions = get_all_regions(session, 'eks')
+    for region in eks_regions:
+        delete_eks_clusters(session, region)
+    
+    # --- ECR Repositories ---
+    ecr_regions = get_all_regions(session, 'ecr')
+    for region in ecr_regions:
+        delete_ecr_repositories(session, region)
+    
+    # --- DynamoDB Tables ---
+    dynamodb_regions = get_all_regions(session, 'dynamodb')
+    for region in dynamodb_regions:
+        delete_dynamodb_tables(session, region)
+    
+    # --- SNS Topics ---
+    sns_regions = get_all_regions(session, 'sns')
+    for region in sns_regions:
+        delete_sns_topics(session, region)
+    
+    # --- SQS Queues ---
+    sqs_regions = get_all_regions(session, 'sqs')
+    for region in sqs_regions:
+        delete_sqs_queues(session, region)
+    
+    logger.info("Completed deletion of all resources.")
+    return True
+
+def get_all_regions(session, service_name):
+    """
+    Return a list of region names where the given service is available.
+    """
+    client = session.client(service_name)
+    regions = [region['RegionName'] for region in client.describe_regions()['Regions']]
+    return regions
+
+# ---------- EC2, ELB, VPC, and Elastic IPs ----------
+
+def delete_ec2_instances(session, region):
+    ec2 = session.client('ec2', region_name=region)
+    try:
+        reservations = ec2.describe_instances()['Reservations']
+        instance_ids = []
+        for reservation in reservations:
+            for instance in reservation.get('Instances', []):
+                instance_ids.append(instance['InstanceId'])
+        if instance_ids:
+            ec2.terminate_instances(InstanceIds=instance_ids)
+            logger.info(f"Terminated EC2 instances in {region}: {instance_ids}")
+    except Exception as e:
+        logger.error(f"Error terminating EC2 instances in {region}: {e}")
+
+def delete_elbs(session, region):
+    elb = session.client('elb', region_name=region)
+    try:
+        response = elb.describe_load_balancers()
+        for lb in response.get('LoadBalancerDescriptions', []):
+            lb_name = lb['LoadBalancerName']
+            try:
+                elb.delete_load_balancer(LoadBalancerName=lb_name)
+                logger.info(f"Deleted ELB {lb_name} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting ELB {lb_name} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing ELBs in {region}: {e}")
+
+def delete_vpcs(session, region):
+    ec2 = session.resource('ec2', region_name=region)
+    try:
+        for vpc in ec2.vpcs.all():
+            try:
+                vpc.delete()
+                logger.info(f"Deleted VPC {vpc.id} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting VPC {vpc.id} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing VPCs in {region}: {e}")
+
+def delete_elastic_ips(session, region):
+    ec2 = session.client('ec2', region_name=region)
+    try:
+        addresses = ec2.describe_addresses()['Addresses']
+        for address in addresses:
+            # Release only if not associated with any instance.
+            if 'AssociationId' not in address:
+                allocation_id = address.get('AllocationId')
+                if allocation_id:
+                    try:
+                        ec2.release_address(AllocationId=allocation_id)
+                        logger.info(f"Released Elastic IP (AllocationId: {allocation_id}) in {region}")
+                    except Exception as e:
+                        logger.error(f"Error releasing Elastic IP {allocation_id} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error describing Elastic IPs in {region}: {e}")
+
+# ---------- S3 Buckets ----------
+
+def delete_s3_buckets(session):
+    s3 = session.client('s3')
+    try:
+        buckets = s3.list_buckets()['Buckets']
+        for bucket in buckets:
+            bucket_name = bucket['Name']
+            try:
+                s3_resource = session.resource('s3')
+                bucket_obj = s3_resource.Bucket(bucket_name)
+                bucket_obj.objects.all().delete()  # Empty bucket contents
+                s3.delete_bucket(Bucket=bucket_name)
+                logger.info(f"Deleted S3 bucket: {bucket_name}")
+            except Exception as e:
+                logger.error(f"Error deleting S3 bucket {bucket_name}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing S3 buckets: {e}")
+
+# ---------- RDS Instances ----------
+
+def delete_rds_instances(session, region):
+    rds = session.client('rds', region_name=region)
+    try:
+        instances = rds.describe_db_instances()['DBInstances']
+        for db in instances:
+            db_identifier = db['DBInstanceIdentifier']
+            try:
+                rds.delete_db_instance(
+                    DBInstanceIdentifier=db_identifier,
+                    SkipFinalSnapshot=True,
+                    DeleteAutomatedBackups=True
+                )
+                logger.info(f"Initiated deletion of RDS instance {db_identifier} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting RDS instance {db_identifier} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing RDS instances in {region}: {e}")
+
+# ---------- Lambda Functions ----------
+
+def delete_lambda_functions(session, region):
+    lambda_client = session.client('lambda', region_name=region)
+    try:
+        functions = lambda_client.list_functions()['Functions']
+        for function in functions:
+            function_name = function['FunctionName']
+            try:
+                lambda_client.delete_function(FunctionName=function_name)
+                logger.info(f"Deleted Lambda function {function_name} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting Lambda function {function_name} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing Lambda functions in {region}: {e}")
+
+# ---------- CloudFormation Stacks ----------
+
+def delete_cloudformation_stacks(session, region):
+    cf = session.client('cloudformation', region_name=region)
+    try:
+        stacks = cf.describe_stacks()['Stacks']
+        for stack in stacks:
+            stack_name = stack['StackName']
+            # Skip stacks that are already being deleted or deleted.
+            if stack['StackStatus'] in ['DELETE_IN_PROGRESS', 'DELETE_COMPLETE']:
+                continue
+            try:
+                cf.delete_stack(StackName=stack_name)
+                logger.info(f"Initiated deletion of CloudFormation stack {stack_name} in {region}")
+                # Optionally wait for deletion to complete.
+                waiter = cf.get_waiter('stack_delete_complete')
+                waiter.wait(StackName=stack_name)
+                logger.info(f"CloudFormation stack {stack_name} deleted in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting CloudFormation stack {stack_name} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error describing CloudFormation stacks in {region}: {e}")
+
+# ---------- EKS Clusters ----------
+
+def delete_eks_clusters(session, region):
+    eks = session.client('eks', region_name=region)
+    try:
+        clusters = eks.list_clusters()['clusters']
+        for cluster_name in clusters:
+            try:
+                eks.delete_cluster(name=cluster_name)
+                logger.info(f"Initiated deletion of EKS cluster {cluster_name} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting EKS cluster {cluster_name} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing EKS clusters in {region}: {e}")
+
+# ---------- ECR Repositories ----------
+
+def delete_ecr_repositories(session, region):
+    ecr = session.client('ecr', region_name=region)
+    try:
+        repositories = ecr.describe_repositories()['repositories']
+        for repo in repositories:
+            repo_name = repo['repositoryName']
+            try:
+                # Delete all images in the repository.
+                images = ecr.list_images(repositoryName=repo_name)['imageIds']
+                if images:
+                    ecr.batch_delete_image(repositoryName=repo_name, imageIds=images)
+                    logger.info(f"Deleted images from ECR repository {repo_name} in {region}")
+                # Delete the repository.
+                ecr.delete_repository(repositoryName=repo_name, force=True)
+                logger.info(f"Deleted ECR repository {repo_name} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting ECR repository {repo_name} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error describing ECR repositories in {region}: {e}")
+
+# ---------- DynamoDB Tables ----------
+
+def delete_dynamodb_tables(session, region):
+    dynamodb = session.client('dynamodb', region_name=region)
+    try:
+        tables = dynamodb.list_tables()['TableNames']
+        for table_name in tables:
+            try:
+                dynamodb.delete_table(TableName=table_name)
+                logger.info(f"Initiated deletion of DynamoDB table {table_name} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting DynamoDB table {table_name} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing DynamoDB tables in {region}: {e}")
+
+# ---------- SNS Topics ----------
+
+def delete_sns_topics(session, region):
+    sns = session.client('sns', region_name=region)
+    try:
+        topics = sns.list_topics()['Topics']
+        for topic in topics:
+            topic_arn = topic['TopicArn']
+            try:
+                sns.delete_topic(TopicArn=topic_arn)
+                logger.info(f"Deleted SNS topic {topic_arn} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting SNS topic {topic_arn} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing SNS topics in {region}: {e}")
+
+# ---------- SQS Queues ----------
+
+def delete_sqs_queues(session, region):
+    sqs = session.client('sqs', region_name=region)
+    try:
+        response = sqs.list_queues()
+        queue_urls = response.get('QueueUrls', [])
+        for queue_url in queue_urls:
+            try:
+                sqs.delete_queue(QueueUrl=queue_url)
+                logger.info(f"Deleted SQS queue {queue_url} in {region}")
+            except Exception as e:
+                logger.error(f"Error deleting SQS queue {queue_url} in {region}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing SQS queues in {region}: {e}")
+
+# ---------- Remove Member Account from Organization ----------
+
+def remove_member_account(session, account_id):
+    """
+    Remove the account from the AWS Organization.
+    Note: This disassociates the account but does not completely 'delete' it.
+    """
+    org_client = session.client('organizations')
+    try:
+        response = org_client.remove_account_from_organization(AccountId=account_id)
+        logger.info(f"Removed account {account_id} from organization: {response}")
+    except Exception as e:
+        logger.error(f"Error removing account {account_id}: {e}")
+        raise
