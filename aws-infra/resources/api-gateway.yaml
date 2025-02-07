@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "API Gateway for ServiceNow Integration"
+
+Resources:
+  ServiceNowApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: "ServiceNowApiGateway"
+
+  ServiceNowApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ServiceNowApiGateway.RootResourceId
+      PathPart: "servicenow"
+      RestApiId: !Ref ServiceNowApiGateway
+
+  ServiceNowApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: "POST"
+      ResourceId: !Ref ServiceNowApiResource
+      RestApiId: !Ref ServiceNowApiGateway
+      AuthorizationType: "NONE"
+      Integration:
+        Type: "AWS_PROXY"
+        IntegrationHttpMethod: "POST"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ServiceNowHandler.Arn}/invocations"
+
+Outputs:
+  ApiGatewayUrl:
+    Description: "URL for the ServiceNow API Gateway"
+    Value: !Sub "https://${ServiceNowApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/servicenow"

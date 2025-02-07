@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "IAM Roles for AWS Account Deletion Automation"
+
+Resources:
+  # IAM Role for Step Functions Execution
+  StepFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "StepFunctionExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "states.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "StepFunctionsExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource:
+                  - "arn:aws:lambda:us-east-1:accountID:function:ValidateInputLambda"
+                  - "arn:aws:lambda:us-east-1:accountID:function:HandleApprovalLambda"
+                  - "arn:aws:lambda:us-east-1:accountID:function:TerminateAccountLambda"
+                  - "arn:aws:lambda:us-east-1:accountID:function:SendNotificationLambda"
+
+  # IAM Role for Lambda Functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "ServiceNowLambdaExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "ServiceNowLambdaPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "sns:Publish"
+                  - "cloudformation:*"
+                  - "dynamodb:*"
+                Resource:
+                  - "*"
+
+Outputs:
+  StepFunctionExecutionRoleArn:
+    Description: "ARN of the Step Function Execution Role"
+    Value: !GetAtt StepFunctionExecutionRole.Arn
+
+  LambdaExecutionRoleArn:
+    Description: "ARN of the Lambda Execution Role"
+    Value: !GetAtt LambdaExecutionRole.Arn

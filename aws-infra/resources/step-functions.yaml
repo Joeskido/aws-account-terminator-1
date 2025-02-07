@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Step Functions State Machine for Account Deletion Workflow"
+
+Resources:
+  DeletionStepFunction:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: "AccountDeletionWorkflow"
+      RoleArn: !ImportValue StepFunctionExecutionRoleArn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Account Deletion Workflow",
+          "StartAt": "ValidateInput",
+          "States": {
+            "ValidateInput": {
+              "Type": "Task",
+              "Resource": "${ValidateInputLambda.Arn}",
+              "Next": "DevExApproval",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "FailureNotification"
+                }
+              ]
+            },
+            "DevExApproval": {
+              "Type": "Task",
+              "Resource": "${HandleApprovalLambda.Arn}",
+              "Parameters": {
+                "ApproverType": "DevExManager",
+                "ApprovalContext.$": "$.context"
+              },
+              "Next": "TerminateAccount",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "FailureNotification"
+                }
+              ]
+            },
+            "TerminateAccount": {
+              "Type": "Task",
+              "Resource": "${TerminateAccountLambda.Arn}",
+              "Next": "SuccessNotification",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "FailureNotification"
+                }
+              ]
+            },
+            "SuccessNotification": {
+              "Type": "Task",
+              "Resource": "${SendNotificationLambda.Arn}",
+              "Parameters": {
+                "NotificationType": "Success"
+              },
+              "End": true
+            },
+            "FailureNotification": {
+              "Type": "Task",
+              "Resource": "${SendNotificationLambda.Arn}",
+              "Parameters": {
+                "NotificationType": "Failure",
+                "ErrorDetails.$": "$.error"
+              },
+              "End": true
+            }
+          }
+        }
+
+Outputs:
+  StateMachineArn:
+    Description: "ARN of the Step Functions state machine"
+    Value: !Ref DeletionStepFunction
